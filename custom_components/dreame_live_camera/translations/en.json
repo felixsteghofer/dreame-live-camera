@@ -1,0 +1,38 @@
+{
+  "title": "Dreame Live Camera",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dreame Live Camera",
+        "description": "Choose an existing Dreame/MOVA vacuum. Live video starts only when you turn on the camera or press Start. The camera PIN is stored in Home Assistant configuration and never exposed as an entity attribute.",
+        "data": {
+          "vacuum_entity_id": "Vacuum",
+          "pin": "Camera PIN (optional until configured)",
+          "max_duration": "Maximum session duration (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_vacuum": "Select an existing Dreame Vacuum entity",
+      "invalid_pin": "Use 4\u201312 digits"
+    },
+    "abort": {
+      "already_configured": "This vacuum already has a live camera"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Camera settings",
+        "description": "Leave PIN omitted to keep the saved PIN. Enter an empty value to clear it.",
+        "data": {
+          "pin": "Camera PIN",
+          "max_duration": "Maximum session duration (seconds)"
+        }
+      }
+    },
+    "error": {
+      "invalid_pin": "Use 4\u201312 digits"
+    }
+  }
+}

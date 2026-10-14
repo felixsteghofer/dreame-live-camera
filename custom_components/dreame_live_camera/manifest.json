@@ -1,0 +1,11 @@
+{
+  "domain": "dreame_live_camera",
+  "name": "Dreame Live Camera",
+  "version": "0.1.0",
+  "config_flow": true,
+  "after_dependencies": ["dreame_vacuum"],
+  "dependencies": ["camera", "ffmpeg"],
+  "iot_class": "cloud_push",
+  "requirements": [],
+  "codeowners": []
+}
