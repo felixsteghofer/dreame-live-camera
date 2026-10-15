@@ -9,7 +9,8 @@ import time
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .aliyun import VideoIdentity
-from .rtmp import Receiver
+from .lan import Receiver
+from .media import device_address
 
 
 class LiveCamera:
@@ -28,6 +29,10 @@ class LiveCamera:
         self.tasks = []
         self.lease = self.grace = None
         self.cleanup_ok = True
+        self.transport = "direct_lan"
+        self.last_peer = None
+        self.last_datagrams = 0
+        self.media_cleanup_ok = True
 
     def notify(self):
         for listener in tuple(self.listeners):
@@ -64,8 +69,10 @@ class LiveCamera:
                     current = await self.state()
                     if current.get("status") == 1:
                         raise RuntimeError("Close the camera in the manufacturer app first")
-                    if not self.cloud._stream_key:
-                        await self.call(self.cloud.get_device_info)
+                    info = await self.call(self.cloud.get_device_info)
+                    host = device_address(info)
+                    if not host:
+                        raise RuntimeError("Vacuum LAN address unavailable")
                     if not self.cloud._stream_key:
                         raise RuntimeError("Device has no LinkVisual channel")
                     channel_id = self.cloud._stream_key
@@ -95,21 +102,22 @@ class LiveCamera:
                     self.lease = asyncio.get_running_loop().call_later(self.duration, lambda:self.background(self.async_stop("Session limit reached"), "limit"))
                     for attempt in range(5):
                         try:
-                            url = await identity.relay(channel_id)
+                            url = await identity.offer(channel_id)
                             break
                         except Exception:
                             if attempt == 4:
-                                raise RuntimeError("Camera relay unavailable") from None
+                                raise RuntimeError("Camera LAN negotiation unavailable") from None
                             await asyncio.sleep(1)
-                    self.process = await asyncio.create_subprocess_exec("/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "quiet", "-probesize", "32768", "-analyzeduration", "0", "-f", "flv", "-i", "pipe:0", "-an", "-vf", "fps=3,scale=640:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-flush_packets", "1", "pipe:1", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                    self.receiver = Receiver(url)
+                    self.process = await asyncio.create_subprocess_exec("/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "quiet", "-probesize", "32768", "-analyzeduration", "0", "-f", "h264", "-use_wallclock_as_timestamps", "1", "-i", "pipe:0", "-an", "-vf", "fps=3,scale=640:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-flush_packets", "1", "pipe:1", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                    self.receiver = Receiver(async_get_clientsession(self.hass), host, url, channel_id)
+                    self.media_cleanup_ok = False
                     self.tasks.append(self.background(self.media(), "media"))
                     self.tasks.append(self.background(self.decode(), "decoder"))
                     async with self.condition:
                         await asyncio.wait_for(self.condition.wait_for(lambda:self.image is not None or not self.active), 20)
                     if self.image is None:
                         raise RuntimeError("No video frames received")
-                    self.stage = "Live"
+                    self.stage = "Live (LAN)"
                     self.notify()
                     # If the user turns it on but never opens a viewer, end it.
                     self.grace = asyncio.get_running_loop().call_later(30, lambda:self.background(self.stop_if_unwatched(), "idle"))
@@ -117,7 +125,7 @@ class LiveCamera:
                 await self._stop("Camera connection failed")
                 if isinstance(error, asyncio.CancelledError):
                     raise
-                safe = str(error) if isinstance(error, RuntimeError) else "Camera connection failed"
+                safe = "Camera connection failed; check the vacuum LAN connection and PIN options"
                 raise RuntimeError(safe) from None
 
     async def keepalive(self):
@@ -209,7 +217,10 @@ class LiveCamera:
                 task.cancel()
         await asyncio.gather(*(t for t in tasks if t is not current), return_exceptions=True)
         if self.receiver:
-            self.receiver.close()
+            await self.receiver.aclose()
+            self.last_peer = self.receiver.peer
+            self.last_datagrams = self.receiver.datagrams
+            self.media_cleanup_ok = self.receiver.cleanup_confirmed
         self.receiver = None
         if self.process:
             if self.process.returncode is None:

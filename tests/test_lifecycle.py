@@ -32,6 +32,17 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         await manager.async_stop()
         self.assertEqual(manager.action.await_count, 1)
 
+    async def test_receiver_stop_retains_safe_transport_evidence(self):
+        manager = self.manager()
+        receiver = SimpleNamespace(aclose=AsyncMock(), peer="10.0.0.9", datagrams=42, cleanup_confirmed=True)
+        manager.receiver = receiver
+        await manager.async_stop()
+        receiver.aclose.assert_awaited_once()
+        self.assertEqual(manager.last_peer, "10.0.0.9")
+        self.assertEqual(manager.last_datagrams, 42)
+        self.assertTrue(manager.media_cleanup_ok)
+        self.assertIsNone(manager.receiver)
+
     async def test_do_not_stop_phone_session(self):
         manager = self.manager()
         manager.session = "ours"

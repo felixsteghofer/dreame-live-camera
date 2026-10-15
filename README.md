@@ -28,21 +28,54 @@ a session subsequently opened by the phone is not stopped.
 
 ## Implementation and limitations
 
-MOVA/Dreame cloud identity → Aliyun identity → PIN-gated monitor → private-mode
-LinkVisual RTMP → video-only FLV → HA's bundled ffmpeg → authenticated HA MJPEG.
-Video is 640 pixels wide at 3 fps. Images exist only in memory and are cleared at
-stop. No microphone, audio playback, recording, driving or cleaning commands are
-implemented. The media receiver has message/frame size bounds and read timeouts.
+MOVA/Dreame cloud identity → Aliyun identity → PIN-gated monitor → cloud WSS
+signaling → **direct LAN UDP video** → HA's bundled ffmpeg → authenticated HA MJPEG.
+Version 0.2.0 adopts the successful LAN PoC. The camera address is discovered from
+the selected vacuum; it is not hardcoded. The receiver only accepts that private
+IPv4 host, disables STUN/TURN media servers, and has no cloud-video relay fallback.
+If direct video cannot be established, startup fails and the owned session is stopped.
 
-This first version uses MJPEG rather than native H.264/WebRTC delivery. It depends
-on private `dreame_vacuum` cloud APIs and may need adjustment after upstream
-updates. Only the LinkVisual/Aliyun provider is implemented. The working local
-PoC was verified on `mova.vacuum.r2475a`; other models are unverified.
+The native HA camera entity/dialog and Start/Stop buttons are preserved. HA delivers
+video at 640 pixels wide and 3 fps. Images and session keys exist only in memory and
+are cleared at stop. No microphone, audio playback, recording, driving or cleaning
+commands are implemented. Frames have size bounds; packet gaps discard the affected
+frame and trigger a throttled keyframe request. Missing UDP data ends the session.
+
+Camera attributes report `video_transport: direct_lan`, `lan_peer`,
+`received_datagrams`, `media_cleanup_confirmed` and `cloud_setup_required: true`.
+The last peer/count remain available after stop as transport evidence; image data
+is cleared. `cleanup_confirmed` covers the owned monitor; media cleanup is separate.
+
+### What is still needed for fully offline operation?
+
+The direct video path is solved. Stock firmware currently still relies on cloud
+services for account/IoT authentication, PIN-gated monitor start, signed signaling
+and SDP/ICE key exchange, plus monitor keepalive and stop. The robot's advertised
+LAN API has not yet been shown to provide those camera operations.
+
+A fully offline implementation needs a local authenticated monitor-control route
+and a local way to exchange the offer/answer and fresh ICE credentials. Those
+credentials also supply the current packet-decryption key. Merely caching a cloud
+login token or signed URL does not establish fresh sessions offline.
+
+Further work: identify and test a stock-firmware LAN endpoint for these operations;
+if none exists, assess whether firmware access can expose a local authenticated
+camera service. Firmware modification/rooting has not been attempted. Finally,
+validate cold startup, restart, PIN handling, live view and stop with WAN access
+blocked. No firewall settings or firmware were changed for this adoption, and WAN
+outage survival is unverified. The integration opens no RTMP relay; the robot's
+own independent cloud traffic has not been audited. This release is **LAN video with cloud-assisted setup**.
+
+The integration depends on private `dreame_vacuum` cloud APIs and pinned aioice
+internals. Only the LinkVisual/Aliyun provider is implemented. Winky's
+`mova.vacuum.r2475a` is the verified model; other models are unverified.
 
 ## Development
 
-Protocol tests run with standard Python. Ten tests cover protocol framing, timestamps, size bounds, a real local TCP handshake, session ownership, cleanup, preview behavior and PIN form handling. Lifecycle/platform tests additionally
-require the Home Assistant environment:
+Twenty-two tests cover media framing/decryption, LAN-only peer policy, malformed input,
+a real UDP/ICE handshake, legacy framing, session ownership, cleanup, preview behavior
+and PIN form handling. Run them in the Home Assistant environment with the declared
+dependencies installed:
 
 ```sh
 python -m unittest discover -s tests -v
@@ -52,7 +85,22 @@ See NOTICE for the MIT-licensed nodedreame protocol implementation used as the
 reference for this Python port. No user credentials or camera images belong in
 this repository.
 
-## Current installation validation
+## LAN adoption validation (0.2.0 candidate)
+
+On 2026-10-15, the direct receiver sustained 35 seconds of Winky video inside
+HA Core: 513 decoded frames, no decoder errors, and confirmed media and monitor
+cleanup. Twenty-two tests passed in Core, including a real UDP/ICE handshake.
+The cloud stream query and LAN start must both request stream type 1; mismatched
+stream types produced video that stopped after a few seconds. Signaling uses the
+session-derived client ID expected by the native SDK.
+
+The final candidate still needs the full-manager sustained-view test and deployment
+verification. LAN connectivity from the development workspace became unavailable
+before those checks finished. A prior intermediate 0.2.0 build is installed on HA;
+it does not contain the final stream-type correction. The candidate's ffmpeg
+wall-clock timestamp option also awaits live verification.
+
+## Earlier cloud installation validation (0.1.0)
 
 Verified in Felix’s HA OS instance on 2026-10-14 with Winky
 (`mova.vacuum.r2475a`). PIN saved through HA integration options; independent

@@ -13,6 +13,8 @@ import uuid
 from email.utils import formatdate
 from urllib.parse import urlencode
 
+from .const import VIDEO_STREAM_TYPE
+
 APP_KEY = "33974273"
 APP_SECRET = "65a62f03ae5eda97af962fecc2e3efa6"
 REGIONS = {"eu":"eu-central-1", "de":"eu-central-1", "ru":"eu-central-1", "cn":"cn-shanghai", "tw":"cn-shanghai", "us":"us-west-1", "sg":"ap-southeast-1", "in":"ap-southeast-1"}
@@ -63,12 +65,13 @@ class VideoIdentity:
             raise RuntimeError("Video identity rejected")
         self.iot_token = result["data"]["iotToken"]
 
-    async def relay(self, channel_id):
-        payload = {"id":str(uuid.uuid4()).upper(), "params":{"streamType":0, "needDomainName":True, "relayEncryptType":0, "clientType":"iOS", "iotId":channel_id, "enablePortPredict":True, "enableWebSocket":True, "forceIFrame":True, "cacheDuration":3000, "relayEncrypted":False}, "request":{"language":"en-US", "appKey":APP_KEY, "iotToken":self.iot_token, "apiVer":"2.2.0"}, "version":"1.0.0"}
+    async def offer(self, channel_id):
+        payload = {"id":str(uuid.uuid4()).upper(), "params":{"streamType":VIDEO_STREAM_TYPE, "needDomainName":True, "relayEncryptType":0, "clientType":"iOS", "iotId":channel_id, "enablePortPredict":True, "enableWebSocket":True, "forceIFrame":True, "cacheDuration":3000, "relayEncrypted":False}, "request":{"language":"en-US", "appKey":APP_KEY, "iotToken":self.iot_token, "apiVer":"2.2.0"}, "version":"1.0.0"}
         result = await self.post(f"{self.region}.api-iot.aliyuncs.com", "/vision/customer/stream/query", payload=payload)
         if result.get("code") not in (0, 200):
-            raise RuntimeError("Video relay rejected")
+            raise RuntimeError("Video negotiation rejected")
         data = result.get("data", {})
-        if not data.get("relayUrl") or data.get("relayDecryptKey", {}).get("key"):
-            raise RuntimeError("Compatible relay unavailable")
-        return data["relayUrl"]
+        signal_url = (data.get("p2pInfo") or {}).get("signalUrl")
+        if not signal_url:
+            raise RuntimeError("Direct LAN video unavailable")
+        return signal_url

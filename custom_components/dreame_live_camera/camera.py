@@ -32,7 +32,7 @@ class DreameLiveCamera(Camera):
 
     @property
     def extra_state_attributes(self):
-        return {"status":self.manager.stage, "decoded_frames":self.manager.frames, "viewers":len(self.manager.viewers), "cleanup_confirmed":self.manager.cleanup_ok, "max_duration":self.manager.duration}
+        return {"status":self.manager.stage, "decoded_frames":self.manager.frames, "viewers":len(self.manager.viewers), "cleanup_confirmed":self.manager.cleanup_ok, "max_duration":self.manager.duration, "video_transport":self.manager.transport, "cloud_setup_required":True, "lan_peer":self.manager.receiver.peer if self.manager.receiver else self.manager.last_peer, "received_datagrams":self.manager.receiver.datagrams if self.manager.receiver else self.manager.last_datagrams, "media_cleanup_confirmed":self.manager.media_cleanup_ok}
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
