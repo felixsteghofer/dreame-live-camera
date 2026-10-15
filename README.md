@@ -66,6 +66,14 @@ blocked. No firewall settings or firmware were changed for this adoption, and WA
 outage survival is unverified. The integration opens no RTMP relay; the robot's
 own independent cloud traffic has not been audited. This release is **LAN video with cloud-assisted setup**.
 
+Stock-LAN research on 2026-10-15 found a working CoAP device-discovery service
+on Winky (UDP 5683, `/sys/device/info/get`). However, SDK discovery and the ALCS
+authentication endpoint returned CoAP 4.04, including an authentication attempt
+using legitimately issued credentials whose device identity matched the LAN
+response. No authenticated local camera-control or signaling route was established.
+The presence of ALCS client code in MOVAhome does not prove those firmware handlers
+are enabled. This bounded result does not rule out other stock-firmware routes.
+
 The integration depends on private `dreame_vacuum` cloud APIs and pinned aioice
 internals. Only the LinkVisual/Aliyun provider is implemented. Winky's
 `mova.vacuum.r2475a` is the verified model; other models are unverified.
