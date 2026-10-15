@@ -7,7 +7,9 @@ external bridge, cloud password copy or robot firmware change is required.
 
 ## Install and configure
 
-Copy `custom_components/dreame_live_camera` into Home Assistant's
+Source and issue tracker: [felixsteghofer/dreame-live-camera](https://github.com/felixsteghofer/dreame-live-camera).
+
+Copy `custom_components/dreame_live_camera` from this repository into Home Assistant's
 `custom_components` directory and restart Core. Add **Dreame Live Camera** under
 Settings → Devices & services. Select the existing vacuum and enter its camera
 PIN. PIN and session-duration settings can be changed through integration options.

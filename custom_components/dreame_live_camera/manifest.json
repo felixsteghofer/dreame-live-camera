@@ -15,5 +15,9 @@
     "aioice==0.10.2",
     "pycryptodome==3.24.0"
   ],
-  "codeowners": []
+  "codeowners": [
+    "@felixsteghofer"
+  ],
+  "documentation": "https://github.com/felixsteghofer/dreame-live-camera",
+  "issue_tracker": "https://github.com/felixsteghofer/dreame-live-camera/issues"
 }
