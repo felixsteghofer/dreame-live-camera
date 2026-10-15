@@ -85,20 +85,25 @@ See NOTICE for the MIT-licensed nodedreame protocol implementation used as the
 reference for this Python port. No user credentials or camera images belong in
 this repository.
 
-## LAN adoption validation (0.2.0 candidate)
+## LAN adoption validation (0.2.0)
 
-On 2026-10-15, the direct receiver sustained 35 seconds of Winky video inside
-HA Core: 513 decoded frames, no decoder errors, and confirmed media and monitor
-cleanup. Twenty-two tests passed in Core, including a real UDP/ICE handshake.
+On 2026-10-15, the full integration manager sustained 60 seconds of Winky video
+inside HA Core: 181 decoded 640×356 JPEG frames (3 fps), 15,294 LAN datagrams,
+and confirmed media and monitor cleanup after viewer disconnect. Twenty-two tests
+passed in Core, including a real UDP/ICE handshake. A separate receiver test decoded
+513 source frames over 35 seconds without errors.
+
 The cloud stream query and LAN start must both request stream type 1; mismatched
 stream types produced video that stopped after a few seconds. Signaling uses the
-session-derived client ID expected by the native SDK.
+session-derived client ID expected by the native SDK. ffmpeg uses wall-clock input
+timestamps so its output tracks the requested 3 fps.
 
-The final candidate still needs the full-manager sustained-view test and deployment
-verification. LAN connectivity from the development workspace became unavailable
-before those checks finished. A prior intermediate 0.2.0 build is installed on HA;
-it does not contain the final stream-type correction. The candidate's ffmpeg
-wall-clock timestamp option also awaits live verification.
+The final build was deployed and HA Core restarted successfully. The existing
+Winky badge opened HA's native camera More Info dialog and displayed live video;
+the deployed entity advanced to 174 decoded frames and 14,820 direct-LAN datagrams.
+Closing the dialog returned the camera to Off with zero viewers and both cleanup
+flags true. An off-state image request returned HTTP 503 without restarting the
+camera. The final HA configuration check passed.
 
 ## Earlier cloud installation validation (0.1.0)
 
