@@ -19,7 +19,12 @@ async def async_setup_entry(hass, entry):
         raise ConfigEntryNotReady("Dreame/MOVA cloud connection is not ready")
     manager = LiveCamera(hass, cloud, entry.options.get("pin", entry.data.get("pin", "")), entry.options.get("max_duration", entry.data.get("max_duration", 120)))
     entry.runtime_data = manager
-    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, lambda event:hass.async_create_task(manager.async_stop())))
+
+    async def async_stop_camera(event):
+        """Await cleanup on HA's event loop during shutdown."""
+        await manager.async_stop()
+
+    entry.async_on_unload(hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, async_stop_camera))
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     await hass.config_entries.async_forward_entry_setups(entry, ["camera", "button"])
     return True

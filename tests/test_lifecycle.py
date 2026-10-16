@@ -1,8 +1,9 @@
 """Lifecycle tests run against HA's own Python environment before loading."""
 import asyncio
+import inspect
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 try:
     from custom_components.dreame_live_camera.manager import LiveCamera
@@ -12,6 +13,33 @@ except ModuleNotFoundError:
 
 @unittest.skipIf(LiveCamera is None, "Run these tests in the HA Core container")
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_listener_is_async_and_awaits_cleanup(self):
+        from custom_components.dreame_live_camera import async_setup_entry
+
+        manager = SimpleNamespace(async_stop=AsyncMock())
+        cloud = SimpleNamespace(logged_in=True)
+        device = SimpleNamespace(_protocol=SimpleNamespace(cloud=cloud))
+        hass = SimpleNamespace(
+            data={"dreame_vacuum": {"vacuum-entry": SimpleNamespace(_device=device)}},
+            bus=SimpleNamespace(async_listen_once=Mock()),
+            config_entries=SimpleNamespace(async_forward_entry_setups=AsyncMock()),
+        )
+        entry = SimpleNamespace(
+            data={"vacuum_entity_id": "vacuum.test"}, options={},
+            async_on_unload=Mock(), add_update_listener=Mock(),
+        )
+        vacuum = SimpleNamespace(platform="dreame_vacuum", config_entry_id="vacuum-entry")
+        with patch("custom_components.dreame_live_camera.er.async_get") as registry, patch(
+            "custom_components.dreame_live_camera.LiveCamera", return_value=manager
+        ):
+            registry.return_value.async_get.return_value = vacuum
+            self.assertTrue(await async_setup_entry(hass, entry))
+
+        handler = hass.bus.async_listen_once.call_args.args[1]
+        self.assertTrue(inspect.iscoroutinefunction(handler))
+        await handler(None)
+        manager.async_stop.assert_awaited_once()
+
     def manager(self):
         manager = LiveCamera(None, None, "test-pin", 60)
         manager.state = AsyncMock(return_value={"session":"ours", "status":1})
