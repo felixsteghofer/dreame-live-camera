@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import hmac
+import json
 import struct
 import unittest
 from types import SimpleNamespace
@@ -152,6 +153,63 @@ class LANTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(a._nominated[1].remote_candidate.host, host)
         finally:
             await asyncio.gather(a.close(), b.close())
+
+    async def test_peer_requires_untyped_play_before_delivering_media(self):
+        """Exercise the receiver against a peer that distinguishes setup/play."""
+        websocket = SimpleNamespace(send_json=AsyncMock(), close=AsyncMock())
+        receiver = lan.Receiver(SimpleNamespace(ws_connect=AsyncMock(return_value=websocket)),
+                                "10.0.0.9", "wss://video.aliyuncs.com/?session=synthetic", "device")
+        connection = receiver.connection
+        candidate = SimpleNamespace(host="10.0.0.2", to_sdp=lambda:"a 1 udp 100 10.0.0.2 1234 typ host")
+        playing = asyncio.Event()
+        commands = []
+        armed = False
+
+        async def request(message, addr, *, integrity_key, **kwargs):
+            nonlocal armed
+            # Validate the actual serialized STUN command rather than mock call args.
+            message.add_message_integrity(integrity_key)
+            parsed = lan.stun.parse_message(bytes(message), integrity_key=integrity_key)
+            software = parsed.attributes.get("SOFTWARE", "")
+            if software.startswith("{"):
+                command = json.loads(software)
+                commands.append(command)
+                params = command["params"]
+                self.assertEqual(params["sessionId"], "synthetic")
+                if params["messageType"] == "startStreaming":
+                    if "streamType" in params:
+                        armed = params["streamType"] == VIDEO_STREAM_TYPE
+                    elif armed:
+                        playing.set()
+            return None
+
+        protocol = SimpleNamespace(local_candidate=candidate, datagram_received=lambda *args:None,
+                                   request=request)
+        pair = SimpleNamespace(remote_candidate=SimpleNamespace(host="10.0.0.9"),
+                               protocol=protocol, remote_addr=("10.0.0.9",1234))
+        connection._protocols = [protocol]
+        connection._local_candidates = [candidate]
+        connection._nominated = {1:pair}
+        connection.remote_username, connection.remote_password = "remote", "synthetic-password"
+        async def signals(): receiver.answer.set()
+        async def receive():
+            await playing.wait()
+            return packet(1,1,b"\x02\x00synthetic-video")
+        async def output(data):
+            self.assertEqual(data,b"synthetic-video")
+            raise RuntimeError("synthetic delivery completed")
+        build = lambda *args, **kwargs:lan.stun.Message(lan.stun.Method.BINDING,lan.stun.Class.REQUEST)
+        with patch.object(connection,"gather_candidates",new=AsyncMock()), patch.object(
+            connection,"connect",new=AsyncMock()), patch.object(connection,"build_request",side_effect=build), patch.object(
+            connection,"recv",side_effect=receive), patch.object(connection,"close",new=AsyncMock()), patch.object(
+            lan,"route_address",return_value="10.0.0.2"), patch.object(receiver,"_signals",side_effect=signals):
+            with self.assertRaisesRegex(RuntimeError,"synthetic delivery completed"):
+                await asyncio.wait_for(receiver.run(output),0.5)
+        self.assertEqual(receiver.datagrams,1)
+        self.assertTrue(receiver.cleanup_confirmed)
+        self.assertEqual([c["seq_num"] for c in commands],[2,3,4])
+        self.assertEqual([c["params"]["messageType"] for c in commands],
+                         ["startStreaming","startStreaming","stopStreaming"])
 
 
 if __name__ == "__main__":

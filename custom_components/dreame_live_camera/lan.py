@@ -214,6 +214,9 @@ class Receiver:
                 raise RuntimeError("Camera did not select the LAN path")
             self.peer = self.host
             await self._control("startStreaming", stream_type=VIDEO_STREAM_TYPE)
+            # The SDK's PlayP2P step is separate from its typed connection start.
+            # Repeating the typed request does not activate video on every device.
+            await self._control("startStreaming")
             await self._keyframe()
             last_keyframe, dropped = time.monotonic(), 0
             while not self.closed:

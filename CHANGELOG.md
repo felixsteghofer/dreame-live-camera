@@ -1,3 +1,11 @@
+# 0.3.1
+
+- Complete LAN startup with the native SDK's separate start-play request after
+  the typed connection start. A repeated typed start is not equivalent.
+- Fix connections that authenticate and acknowledge startup but deliver no video.
+- Keep automatic relay fallback, session limits, existing settings and entity IDs.
+- Restart Home Assistant after installing this update.
+
 # 0.3.0
 
 - Prefer direct LAN video and automatically try the cloud relay if LAN signaling,

@@ -1,7 +1,7 @@
 {
   "domain": "dreame_live_camera",
   "name": "Dreame Live Camera",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "config_flow": true,
   "after_dependencies": [
     "dreame_vacuum"

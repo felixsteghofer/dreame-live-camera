@@ -101,6 +101,18 @@ See NOTICE for the MIT-licensed nodedreame protocol implementation used as the
 reference for this Python port. No user credentials or camera images belong in
 this repository.
 
+## LAN start-play validation (0.3.1)
+
+LAN startup sends both the typed connection start and the SDK-style start-play
+request without `streamType`. Repeating the typed request is not equivalent.
+On 2026-10-28, the release candidate sustained 35 seconds of direct LAN video:
+8,993 packets and 106 decoded 640×356 JPEG frames, with zero relay bytes. Closing
+the viewer stopped the monitor and decoder, cleared the image and left no tasks;
+both cleanup checks passed. All 38 tests passed in HA Core 2026.10.4, including a
+peer that withholds media until it receives the separate start-play request.
+The cloud query and initial typed start still use stream type 1. Automatic relay
+fallback remains available if direct video fails.
+
 ## Relay fallback validation (0.3.0)
 
 On 2026-10-28, 37 tests passed in HA Core 2026.10.4, including silent LAN
