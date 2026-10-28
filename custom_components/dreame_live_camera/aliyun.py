@@ -65,13 +65,24 @@ class VideoIdentity:
             raise RuntimeError("Video identity rejected")
         self.iot_token = result["data"]["iotToken"]
 
-    async def offer(self, channel_id):
+    async def _stream_info(self, channel_id):
         payload = {"id":str(uuid.uuid4()).upper(), "params":{"streamType":VIDEO_STREAM_TYPE, "needDomainName":True, "relayEncryptType":0, "clientType":"iOS", "iotId":channel_id, "enablePortPredict":True, "enableWebSocket":True, "forceIFrame":True, "cacheDuration":3000, "relayEncrypted":False}, "request":{"language":"en-US", "appKey":APP_KEY, "iotToken":self.iot_token, "apiVer":"2.2.0"}, "version":"1.0.0"}
         result = await self.post(f"{self.region}.api-iot.aliyuncs.com", "/vision/customer/stream/query", payload=payload)
         if result.get("code") not in (0, 200):
             raise RuntimeError("Video negotiation rejected")
-        data = result.get("data", {})
+        return result.get("data", {})
+
+    async def offer(self, channel_id):
+        data = await self._stream_info(channel_id)
         signal_url = (data.get("p2pInfo") or {}).get("signalUrl")
         if not signal_url:
             raise RuntimeError("Direct LAN video unavailable")
         return signal_url
+
+    async def relay(self, channel_id):
+        """Request a fresh relay URL only when direct video has failed."""
+        data = await self._stream_info(channel_id)
+        url = data.get("relayUrl")
+        if not url or data.get("relayDecryptKey"):
+            raise RuntimeError("Video relay unavailable")
+        return url

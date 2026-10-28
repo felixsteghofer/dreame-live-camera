@@ -67,6 +67,17 @@ class ProtocolTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ValueError):
                 rtmp.Receiver(value)
 
+    async def test_async_relay_close_waits_for_socket_and_clears_signed_url(self):
+        from unittest.mock import AsyncMock, Mock
+        receiver = rtmp.Receiver("rtmp://127.0.0.1/live?token=synthetic/session")
+        receiver.writer = type("Writer",(),{"close":Mock(),"wait_closed":AsyncMock()})()
+        await receiver.aclose()
+        await receiver.aclose()
+        self.assertTrue(receiver.cleanup_confirmed)
+        self.assertIsNone(receiver.tc_url)
+        self.assertIsNone(receiver.playpath)
+        receiver.writer.wait_closed.assert_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

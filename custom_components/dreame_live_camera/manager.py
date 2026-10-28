@@ -11,6 +11,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .aliyun import VideoIdentity
 from .lan import Receiver
 from .media import device_address
+from .rtmp import Receiver as RelayReceiver
+
+FIRST_FRAME_TIMEOUT = 20
 
 
 class LiveCamera:
@@ -27,12 +30,16 @@ class LiveCamera:
         self.session = None
         self.receiver = self.process = None
         self.tasks = []
+        self.media_tasks = []
         self.lease = self.grace = None
         self.cleanup_ok = True
         self.transport = "direct_lan"
         self.last_peer = None
         self.last_datagrams = 0
         self.media_cleanup_ok = True
+        self._media_cleanup_failed = False
+        self.last_relay_bytes = 0
+        self.fallback_reason = None
 
     def notify(self):
         for listener in tuple(self.listeners):
@@ -63,16 +70,22 @@ class LiveCamera:
             if self.active:
                 return
             self.stage = "Connecting"
+            self.transport = "direct_lan"
+            self.fallback_reason = None
+            self.last_peer = None
+            self.last_datagrams = self.last_relay_bytes = 0
+            self._media_cleanup_failed = False
             self.notify()
             try:
-                async with asyncio.timeout(75):
+                async with asyncio.timeout(min(75, self.duration)):
                     current = await self.state()
                     if current.get("status") == 1:
                         raise RuntimeError("Close the camera in the manufacturer app first")
                     info = await self.call(self.cloud.get_device_info)
-                    host = device_address(info)
-                    if not host:
-                        raise RuntimeError("Vacuum LAN address unavailable")
+                    try:
+                        host = device_address(info)
+                    except ValueError:
+                        host = None
                     if not self.cloud._stream_key:
                         raise RuntimeError("Device has no LinkVisual channel")
                     channel_id = self.cloud._stream_key
@@ -100,32 +113,18 @@ class LiveCamera:
                     self.frames, self.image = 0, None
                     self.tasks.append(self.background(self.keepalive(), "keepalive"))
                     self.lease = asyncio.get_running_loop().call_later(self.duration, lambda:self.background(self.async_stop("Session limit reached"), "limit"))
-                    for attempt in range(5):
-                        try:
-                            url = await identity.offer(channel_id)
-                            break
-                        except Exception:
-                            if attempt == 4:
-                                raise RuntimeError("Camera LAN negotiation unavailable") from None
-                            await asyncio.sleep(1)
-                    self.process = await asyncio.create_subprocess_exec("/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "quiet", "-probesize", "32768", "-analyzeduration", "0", "-f", "h264", "-use_wallclock_as_timestamps", "1", "-i", "pipe:0", "-an", "-vf", "fps=3,scale=640:-2", "-f", "image2pipe", "-vcodec", "mjpeg", "-flush_packets", "1", "pipe:1", stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-                    self.receiver = Receiver(async_get_clientsession(self.hass), host, url, channel_id)
-                    self.media_cleanup_ok = False
-                    self.tasks.append(self.background(self.media(), "media"))
-                    self.tasks.append(self.background(self.decode(), "decoder"))
+                    self.tasks.append(self.background(self.media(identity, channel_id, host), "media"))
                     async with self.condition:
-                        await asyncio.wait_for(self.condition.wait_for(lambda:self.image is not None or not self.active), 20)
+                        await self.condition.wait_for(lambda:self.image is not None or not self.active)
                     if self.image is None:
                         raise RuntimeError("No video frames received")
-                    self.stage = "Live (LAN)"
-                    self.notify()
                     # If the user turns it on but never opens a viewer, end it.
                     self.grace = asyncio.get_running_loop().call_later(30, lambda:self.background(self.stop_if_unwatched(), "idle"))
             except BaseException as error:
                 await self._stop("Camera connection failed")
                 if isinstance(error, asyncio.CancelledError):
                     raise
-                safe = "Camera connection failed; check the vacuum LAN connection and PIN options"
+                safe = "Camera connection failed; LAN and relay video could not be started"
                 raise RuntimeError(safe) from None
 
     async def keepalive(self):
@@ -143,46 +142,134 @@ class LiveCamera:
         except Exception:
             await self.async_stop("Camera keep-alive ended")
 
-    async def media(self):
-        async def output(data):
-            self.process.stdin.write(data)
-            await self.process.stdin.drain()
-        try:
-            await self.receiver.run(output)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await self.async_stop("Video transport ended")
+    async def media(self, identity, channel_id, host):
+        """Prefer LAN, then try relay once without extending the session lease."""
+        for transport in ("direct_lan", "cloud_relay"):
+            if not self.active:
+                return
+            self.transport = transport
+            self.stage = "Connecting (LAN)" if transport == "direct_lan" else "Connecting (relay)"
+            self.notify()
+            try:
+                if transport == "direct_lan":
+                    if not host:
+                        raise RuntimeError("Vacuum LAN address unavailable")
+                    url = await identity.offer(channel_id)
+                    receiver = Receiver(async_get_clientsession(self.hass), host, url, channel_id)
+                    input_format = "h264"
+                else:
+                    url = await identity.relay(channel_id)
+                    receiver = RelayReceiver(url)
+                    input_format = "flv"
+                await self._play(receiver, input_format)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # Never expose SDK exceptions, signed URLs or media in logs/state.
+                if transport == "direct_lan":
+                    self.fallback_reason = "LAN video unavailable"
+            finally:
+                await self._close_media()
+        # Wake startup before taking its lock; async_start owns failure cleanup.
+        self.active = False
+        async with self.condition:
+            self.condition.notify_all()
+        await self.async_stop("Video connection failed")
 
-    async def decode(self):
-        buffered = b""
+    async def _play(self, receiver, input_format):
+        self.receiver = receiver
+        self.media_cleanup_ok = False
+        self.image = None
+        self.process = await asyncio.create_subprocess_exec(
+            "/usr/bin/ffmpeg", "-hide_banner", "-loglevel", "quiet",
+            "-probesize", "32768", "-analyzeduration", "0", "-f", input_format,
+            "-use_wallclock_as_timestamps", "1", "-i", "pipe:0", "-an",
+            "-vf", "fps=3,scale=640:-2", "-f", "image2pipe", "-vcodec", "mjpeg",
+            "-flush_packets", "1", "pipe:1", stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        process = self.process
+        async def output(data):
+            process.stdin.write(data)
+            await process.stdin.drain()
+        self.media_tasks = [
+            self.background(receiver.run(output), "receiver"),
+            self.background(self.decode(process), "decoder"),
+        ]
+        async def first_frame():
+            async with self.condition:
+                await self.condition.wait_for(lambda:self.image is not None)
+        ready = self.background(first_frame(), "first frame")
         try:
-            while self.active:
-                chunk = await self.process.stdout.read(65536)
-                if not chunk:
-                    raise RuntimeError("Decoder ended")
-                buffered += chunk
-                while True:
-                    start = buffered.find(b"\xff\xd8")
-                    if start < 0:
-                        buffered = buffered[-1:]
-                        break
-                    buffered = buffered[start:]
-                    end = buffered.find(b"\xff\xd9", 2)
-                    if end < 0:
-                        break
-                    self.image, buffered = buffered[:end+2], buffered[end+2:]
-                    self.frames += 1
-                    async with self.condition:
-                        self.condition.notify_all()
-                    if self.frames == 1 or self.frames % 15 == 0:
-                        self.notify()
-                if len(buffered) > 4*1024*1024:
-                    raise RuntimeError("Video frame too large")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await self.async_stop("Video decoder ended")
+            done, _ = await asyncio.wait([*self.media_tasks, ready], timeout=FIRST_FRAME_TIMEOUT,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if ready not in done:
+                for task in done:
+                    task.result()
+                raise RuntimeError("No video frames received")
+            self.stage = "Live (LAN)" if self.transport == "direct_lan" else "Live (relay)"
+            self.notify()
+            done, _ = await asyncio.wait(self.media_tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+            raise RuntimeError("Video transport ended")
+        finally:
+            ready.cancel()
+            await asyncio.gather(ready, return_exceptions=True)
+
+    async def decode(self, process):
+        buffered = b""
+        while self.active:
+            chunk = await process.stdout.read(65536)
+            if not chunk:
+                raise RuntimeError("Decoder ended")
+            buffered += chunk
+            while True:
+                start = buffered.find(b"\xff\xd8")
+                if start < 0:
+                    buffered = buffered[-1:]
+                    break
+                buffered = buffered[start:]
+                end = buffered.find(b"\xff\xd9", 2)
+                if end < 0:
+                    break
+                self.image, buffered = buffered[:end+2], buffered[end+2:]
+                self.frames += 1
+                async with self.condition:
+                    self.condition.notify_all()
+                if self.frames == 1 or self.frames % 15 == 0:
+                    self.notify()
+            if len(buffered) > 4*1024*1024:
+                raise RuntimeError("Video frame too large")
+
+    async def _close_media(self):
+        tasks, self.media_tasks = self.media_tasks, []
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        receiver, self.receiver = self.receiver, None
+        if receiver:
+            try:
+                await receiver.aclose()
+                self._media_cleanup_failed |= not receiver.cleanup_confirmed
+            except Exception:
+                self._media_cleanup_failed = True
+            if self.transport == "direct_lan":
+                self.last_peer, self.last_datagrams = receiver.peer, receiver.datagrams
+            else:
+                self.last_relay_bytes = receiver.received
+            self.media_cleanup_ok = not self._media_cleanup_failed
+        process, self.process = self.process, None
+        if process and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(process.wait(), 3)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
 
     async def stop_if_unwatched(self):
         if not self.viewers:
@@ -216,21 +303,7 @@ class LiveCamera:
             if task is not current:
                 task.cancel()
         await asyncio.gather(*(t for t in tasks if t is not current), return_exceptions=True)
-        if self.receiver:
-            await self.receiver.aclose()
-            self.last_peer = self.receiver.peer
-            self.last_datagrams = self.receiver.datagrams
-            self.media_cleanup_ok = self.receiver.cleanup_confirmed
-        self.receiver = None
-        if self.process:
-            if self.process.returncode is None:
-                self.process.terminate()
-                try:
-                    await asyncio.wait_for(self.process.wait(), 3)
-                except TimeoutError:
-                    self.process.kill()
-                    await self.process.wait()
-            self.process = None
+        await self._close_media()
         if self.session:
             try:
                 state = await self.state()

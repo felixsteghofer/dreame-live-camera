@@ -1,4 +1,4 @@
-"""Cloud-signaled, direct-LAN LinkVisual video. No media relay fallback.
+"""Cloud-signaled, direct-LAN LinkVisual video receiver.
 
 The aioice private APIs used here are isolated and pinned in manifest.json.
 """

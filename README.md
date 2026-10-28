@@ -32,25 +32,31 @@ a session subsequently opened by the phone is not stopped.
 
 MOVA/Dreame cloud identity → Aliyun identity → PIN-gated monitor → cloud WSS
 signaling → **direct LAN UDP video** → HA's bundled ffmpeg → authenticated HA MJPEG.
-Version 0.2.0 adopts the successful LAN PoC. The camera address is discovered from
+The camera address is discovered from
 the selected vacuum; it is not hardcoded. The receiver only accepts that private
-IPv4 host, disables STUN/TURN media servers, and has no cloud-video relay fallback.
-If direct video cannot be established, startup fails and the owned session is stopped.
+IPv4 host and disables STUN/TURN media servers for the direct connection.
+If LAN negotiation, video reception or decoding fails, version 0.3.0 closes that
+receiver and decoder, then requests a fresh cloud RTMP relay and decodes its FLV
+video. A LAN connection without a first decoded frame times out after 20 seconds.
+Relay recovery is also attempted if a working LAN stream ends. Each new camera
+session tries LAN first; the fallback does not extend the original session limit.
 
 The native HA camera entity/dialog and Start/Stop buttons are preserved. HA delivers
 video at 640 pixels wide and 3 fps. Images and session keys exist only in memory and
 are cleared at stop. No microphone, audio playback, recording, driving or cleaning
 commands are implemented. Frames have size bounds; packet gaps discard the affected
-frame and trigger a throttled keyframe request. Missing UDP data ends the session.
+frame and trigger a throttled keyframe request. Missing UDP data triggers relay
+fallback; if that also fails, the owned monitor is stopped.
 
-Camera attributes report `video_transport: direct_lan`, `lan_peer`,
-`received_datagrams`, `media_cleanup_confirmed` and `cloud_setup_required: true`.
+Camera attributes report `video_transport: direct_lan` or `cloud_relay`, `lan_peer`,
+`received_datagrams`, `relay_bytes`, `fallback_reason`, `media_cleanup_confirmed`
+and `cloud_setup_required: true`. The status is `Live (LAN)` or `Live (relay)`.
 The last peer/count remain available after stop as transport evidence; image data
 is cleared. `cleanup_confirmed` covers the owned monitor; media cleanup is separate.
 
 ### What is still needed for fully offline operation?
 
-The direct video path is solved. Stock firmware currently still relies on cloud
+Stock firmware currently still relies on cloud
 services for account/IoT authentication, PIN-gated monitor start, signed signaling
 and SDP/ICE key exchange, plus monitor keepalive and stop. The robot's advertised
 LAN API has not yet been shown to provide those camera operations.
@@ -65,8 +71,8 @@ if none exists, assess whether firmware access can expose a local authenticated
 camera service. Firmware modification/rooting has not been attempted. Finally,
 validate cold startup, restart, PIN handling, live view and stop with WAN access
 blocked. No firewall settings or firmware were changed for this adoption, and WAN
-outage survival is unverified. The integration opens no RTMP relay; the robot's
-own independent cloud traffic has not been audited. This release is **LAN video with cloud-assisted setup**.
+outage survival is unverified. Relay fallback also sends video through the vendor's
+cloud. The robot's independent cloud traffic has not been fully audited.
 
 Stock-LAN research on 2026-10-15 found a working CoAP device-discovery service
 on Winky (UDP 5683, `/sys/device/info/get`). However, SDK discovery and the ALCS
@@ -82,9 +88,9 @@ internals. Only the LinkVisual/Aliyun provider is implemented. Winky's
 
 ## Development
 
-Twenty-two tests cover media framing/decryption, LAN-only peer policy, malformed input,
-a real UDP/ICE handshake, legacy framing, session ownership, cleanup, preview behavior
-and PIN form handling. Run them in the Home Assistant environment with the declared
+Tests cover media framing/decryption, direct peer policy, malformed input, a real
+UDP/ICE handshake, relay framing, fallback, session ownership, cleanup, preview
+behavior and PIN form handling. Run them in the Home Assistant environment with the declared
 dependencies installed:
 
 ```sh
@@ -94,6 +100,21 @@ python -m unittest discover -s tests -v
 See NOTICE for the MIT-licensed nodedreame protocol implementation used as the
 reference for this Python port. No user credentials or camera images belong in
 this repository.
+
+## Relay fallback validation (0.3.0)
+
+On 2026-10-28, 37 tests passed in HA Core 2026.10.4, including silent LAN
+connections, decoder failure, mid-stream recovery, cancellation, the original
+session limit, and protection of a phone-owned monitor. A full-manager live test
+recovered from a LAN connection with no media to relay video: 37 decoded JPEG
+frames at 640×356, with advancing frame and byte counters. Closing its viewer
+stopped the monitor and decoder, cleared the image, and left no session tasks.
+
+The installed `camera.winky_live` also recovered automatically, served a valid
+640×356 JPEG through HA's camera API, advanced to 13 decoded frames, and stopped
+with both monitor and media cleanup confirmed. Existing entity IDs and settings
+were preserved. LAN recovery is tested synthetically; Winky's direct path was
+still producing no video during this validation.
 
 ## LAN adoption validation (0.2.0)
 

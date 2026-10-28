@@ -62,6 +62,10 @@ class Receiver:
         self.ack_window = 250000
         self.last_ping = 0.0
         self.closed = False
+        self.cleanup_confirmed = False
+        self.peer = None
+        self.datagrams = 0
+        self._close_lock = asyncio.Lock()
 
     async def read(self, count):
         result = await asyncio.wait_for(self.reader.readexactly(count), 20)
@@ -158,3 +162,15 @@ class Receiver:
         self.closed = True
         if self.writer:
             self.writer.close()
+
+    async def aclose(self):
+        """Close the relay socket, including cancellation during startup."""
+        async with self._close_lock:
+            self.close()
+            if self.writer:
+                try:
+                    await asyncio.wait_for(self.writer.wait_closed(), 3)
+                except (OSError, TimeoutError):
+                    return
+            self.app = self.tc_url = self.playpath = None
+            self.cleanup_confirmed = True

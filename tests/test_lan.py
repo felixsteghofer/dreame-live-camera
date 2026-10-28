@@ -29,11 +29,21 @@ class LANTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(receiver.client_id, "client-test")
         await receiver.aclose()
 
-    async def test_no_silent_relay_fallback(self):
+    async def test_lan_offer_does_not_return_relay_as_signaling(self):
         identity = aliyun.VideoIdentity(None, "eu")
         identity.post = AsyncMock(return_value={"code":200,"data":{"relayUrl":"rtmp://example.invalid/private"}})
         with self.assertRaisesRegex(RuntimeError, "Direct LAN"):
             await identity.offer("synthetic-channel")
+
+    async def test_fallback_requests_same_stream_and_rejects_encrypted_relay(self):
+        identity = aliyun.VideoIdentity(None, "eu")
+        identity.post = AsyncMock(return_value={"code":200,"data":{"relayUrl":"rtmp://127.0.0.1/live/synthetic"}})
+        self.assertEqual(await identity.relay("synthetic-channel"),"rtmp://127.0.0.1/live/synthetic")
+        self.assertEqual(identity.post.call_args.kwargs["payload"]["params"]["streamType"],VIDEO_STREAM_TYPE)
+        for data in ({}, {"relayUrl":"rtmp://127.0.0.1/live/synthetic","relayDecryptKey":"synthetic"}):
+            identity.post.return_value = {"code":200,"data":data}
+            with self.assertRaisesRegex(RuntimeError,"Video relay unavailable"):
+                await identity.relay("synthetic-channel")
 
     def test_host_and_signaling_restrictions(self):
         for value in ["example.com", "8.8.8.8", "127.0.0.1", "224.0.0.1", "0.0.0.0", "10.0.0.1/24"]:
